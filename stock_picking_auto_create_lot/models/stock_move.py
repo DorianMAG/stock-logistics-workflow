@@ -1,6 +1,7 @@
 # Copyright 2020 ACSONE SA/NV
 # License AGPL-3.0 or later (https://www.gnu.org/licenses/agpl).
-from odoo import api, models
+from odoo import api, models, Command
+from odoo.tools.float_utils import float_compare
 
 
 class StockMove(models.Model):
@@ -23,22 +24,25 @@ class StockMove(models.Model):
             move.display_assign_serial = False
         return
 
-    # pylint: disable=missing-return
-    def _set_quantities_to_reservation(self):
-        super()._set_quantities_to_reservation()
-        for move in self:
-            if move.state not in ("partially_available", "assigned"):
-                continue
-            if (
-                move.product_id.tracking == "none"
-                or not (
-                    move.product_id.auto_create_lot
-                    or move.product_id.categ_id.auto_create_lot
-                )
-                or not move.picking_type_id.auto_create_lot
-            ):
-                continue
-            for move_line in move.move_line_ids:
-                if move_line.lot_id:
-                    # Create-backorder wizard would open without this.
-                    move_line.quantity = move_line.quantity_product_uom
+    def _set_quantity_done_prepare_vals(self, qty):
+        res = super()._set_quantity_done_prepare_vals(qty)
+        if (
+            self.state in ("partially_available", "assigned")
+            and self.product_id.tracking != "none"
+            and self.picking_type_id.auto_create_lot
+            and (
+                self.product_id.auto_create_lot
+                or self.product_id.categ_id.auto_create_lot
+            )
+        ):
+            total_qty = self.product_uom._compute_quantity(qty, self.product_id.uom_id, round=False)
+            if float_compare(total_qty, 0, precision_rounding=self.product_id.uom_id.rounding) > 0:
+                existing_mls = self.move_line_ids
+                if existing_mls:
+                    first_ml = existing_mls[0]
+                    first_ml_qty = self.product_id.uom_id._compute_quantity(total_qty, first_ml.product_uom_id, round=False)
+                    new_res = [Command.update(first_ml.id, {'quantity': first_ml_qty})]
+                    for ml in existing_mls[1:]:
+                        new_res.append(Command.delete(ml.id))
+                    res = new_res
+        return res
