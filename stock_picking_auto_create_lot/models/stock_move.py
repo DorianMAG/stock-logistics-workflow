@@ -25,7 +25,6 @@ class StockMove(models.Model):
         return
 
     def _set_quantity_done_prepare_vals(self, qty):
-        res = super()._set_quantity_done_prepare_vals(qty)
         if (
             self.state in ("partially_available", "assigned")
             and self.product_id.tracking != "none"
@@ -34,15 +33,11 @@ class StockMove(models.Model):
                 self.product_id.auto_create_lot
                 or self.product_id.categ_id.auto_create_lot
             )
+            and self.move_line_ids
         ):
-            total_qty = self.product_uom._compute_quantity(qty, self.product_id.uom_id, round=False)
-            if float_compare(total_qty, 0, precision_rounding=self.product_id.uom_id.rounding) > 0:
-                existing_mls = self.move_line_ids
-                if existing_mls:
-                    first_ml = existing_mls[0]
-                    first_ml_qty = self.product_id.uom_id._compute_quantity(total_qty, first_ml.product_uom_id, round=False)
-                    new_res = [Command.update(first_ml.id, {'quantity': first_ml_qty})]
-                    for ml in existing_mls[1:]:
-                        new_res.append(Command.delete(ml.id))
-                    res = new_res
-        return res
+            total_qty = self.product_uom._compute_quantity(qty, self.product_uom, round=False)
+            if float_compare(total_qty, 0, precision_rounding=self.product_uom.rounding) > 0:
+                first_ml = self.move_line_ids[0]
+                first_ml_qty = self.product_uom._compute_quantity(total_qty, first_ml.product_uom_id, round=False)
+                first_ml.quantity = first_ml_qty
+        return super()._set_quantity_done_prepare_vals(qty)
